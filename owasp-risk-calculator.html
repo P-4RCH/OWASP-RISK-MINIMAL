@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OWASP Risk Assessment Calculator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0a12; font-family: 'Courier New', monospace; color: #e8e8f0; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #111; }
+    ::-webkit-scrollbar-thumb { background: #e94560; }
+    button:focus, textarea:focus { outline: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState } = React;
+
+    const PARAMS = {
+      SL:  { label:"Skill Level",             group:"Threat Agent",    values:[{v:1,label:"No technical skills"},{v:3,label:"Some technical skills"},{v:5,label:"Advanced computer user"},{v:6,label:"Network and programming skills"},{v:9,label:"Security penetration skills"}] },
+      M:   { label:"Motive",                  group:"Threat Agent",    values:[{v:1,label:"Low or no reward"},{v:4,label:"Possible reward"},{v:9,label:"High reward"}] },
+      O:   { label:"Opportunity",             group:"Threat Agent",    values:[{v:0,label:"Full access / expensive resources required"},{v:4,label:"Special access or resources required"},{v:7,label:"Some access or resources required"},{v:9,label:"No access or resources required"}] },
+      S:   { label:"Size",                    group:"Threat Agent",    values:[{v:2,label:"Developers, System administrators"},{v:4,label:"Intranet users"},{v:5,label:"Partners"},{v:6,label:"Authenticated users"},{v:9,label:"Anonymous Internet users"}] },
+      ED:  { label:"Ease of Discovery",       group:"Vulnerability",   values:[{v:1,label:"Practically impossible"},{v:3,label:"Difficult"},{v:7,label:"Easy"},{v:9,label:"Automated tools available"}] },
+      EE:  { label:"Ease of Exploit",         group:"Vulnerability",   values:[{v:1,label:"Theoretical"},{v:3,label:"Difficult"},{v:5,label:"Easy"},{v:9,label:"Automated tools available"}] },
+      A:   { label:"Awareness",               group:"Vulnerability",   values:[{v:1,label:"Unknown"},{v:4,label:"Hidden"},{v:6,label:"Obvious"},{v:9,label:"Public knowledge"}] },
+      ID:  { label:"Intrusion Detection",     group:"Vulnerability",   values:[{v:1,label:"Active detection in application"},{v:3,label:"Logged and reviewed"},{v:8,label:"Logged without review"},{v:9,label:"Not logged"}] },
+      LC:  { label:"Loss of Confidentiality", group:"Technical Impact",values:[{v:0,label:"N/A"},{v:2,label:"Minimal non-sensitive data disclosed"},{v:6,label:"Minimal critical / Extensive non-sensitive data"},{v:7,label:"Extensive critical data disclosed"},{v:9,label:"All data disclosed"}] },
+      LI:  { label:"Loss of Integrity",       group:"Technical Impact",values:[{v:0,label:"N/A"},{v:1,label:"Minimal slightly corrupt data"},{v:3,label:"Minimal seriously corrupt data"},{v:5,label:"Extensive slightly corrupt data"},{v:7,label:"Extensive seriously corrupt data"},{v:9,label:"All data totally corrupt"}] },
+      LAV: { label:"Loss of Availability",    group:"Technical Impact",values:[{v:0,label:"N/A"},{v:1,label:"Minimal secondary services interrupted"},{v:5,label:"Minimal primary / Extensive secondary services"},{v:7,label:"Extensive primary services interrupted"},{v:9,label:"All services completely lost"}] },
+      LAC: { label:"Loss of Accountability",  group:"Technical Impact",values:[{v:1,label:"Fully traceable"},{v:7,label:"Possibly traceable"},{v:9,label:"Completely anonymous"}] },
+      FD:  { label:"Financial Damage",        group:"Business Impact", values:[{v:0,label:"N/A"},{v:1,label:"Less than cost to fix"},{v:3,label:"Minor effect on annual profit"},{v:7,label:"Significant effect on annual profit"},{v:9,label:"Bankruptcy"}] },
+      RD:  { label:"Reputation Damage",       group:"Business Impact", values:[{v:0,label:"N/A"},{v:1,label:"Minimal damage"},{v:4,label:"Loss of major accounts"},{v:5,label:"Loss of goodwill"},{v:9,label:"Brand damage"}] },
+      NC:  { label:"Non-compliance",          group:"Business Impact", values:[{v:0,label:"N/A"},{v:2,label:"Minor violation"},{v:5,label:"Clear violation"},{v:7,label:"High profile violation"}] },
+      PV:  { label:"Privacy Violation",       group:"Business Impact", values:[{v:0,label:"N/A"},{v:3,label:"One individual"},{v:5,label:"Hundreds of people"},{v:7,label:"Thousands of people"},{v:9,label:"Millions of people"}] },
+    };
+
+    const PARAM_KEYS = Object.keys(PARAMS);
+    const GROUPS = ["Threat Agent","Vulnerability","Technical Impact","Business Impact"];
+    const GROUP_COLORS = {
+      "Threat Agent":     {bg:"#1a1a2e",accent:"#e94560",light:"#ff6b6b"},
+      "Vulnerability":    {bg:"#16213e",accent:"#f5a623",light:"#ffd166"},
+      "Technical Impact": {bg:"#0f3460",accent:"#4ecdc4",light:"#7fffd4"},
+      "Business Impact":  {bg:"#1b262c",accent:"#a78bfa",light:"#c4b5fd"},
+    };
+    const LEVEL_COLORS = {LOW:"#4ecdc4",MEDIUM:"#f5a623",HIGH:"#e94560",CRITICAL:"#a78bfa"};
+
+    const getDefaultValues = () => Object.fromEntries(PARAM_KEYS.map(k=>[k,PARAMS[k].values[0].v]));
+
+    function parseVector(str) {
+      const parts = str.trim().split("/");
+      const parsed = {};
+      const seenKeys = new Set();
+      for (const part of parts) {
+        const ci = part.indexOf(":");
+        if (ci === -1) continue;
+        const rawKey = part.slice(0,ci).trim().toUpperCase();
+        const rawVal = part.slice(ci+1).trim();
+        const numVal = Number(rawVal);
+        if (!PARAMS[rawKey]) {
+          parsed[rawKey]={inputVal:isNaN(numVal)?rawVal:numVal,resolvedVal:null,isValid:false,isUnknown:true,isMissing:false};
+          continue;
+        }
+        seenKeys.add(rawKey);
+        const validVals = PARAMS[rawKey].values.map(x=>x.v);
+        const isValid = !isNaN(numVal) && validVals.includes(numVal);
+        parsed[rawKey]={inputVal:isNaN(numVal)?rawVal:numVal,resolvedVal:isValid?numVal:null,isValid,isUnknown:false,isMissing:false};
+      }
+      for (const k of PARAM_KEYS) {
+        if (!seenKeys.has(k)&&!parsed[k]) {
+          parsed[k]={inputVal:null,resolvedVal:null,isValid:false,isUnknown:false,isMissing:true};
+        }
+      }
+      return {parsed,hasErrors:Object.values(parsed).some(p=>!p.isValid)};
+    }
+
+    function buildVector(values) { return PARAM_KEYS.map(k=>`${k}:${values[k]}`).join("/"); }
+
+    function calcScore(values) {
+      const avg = ks => ks.reduce((s,k)=>s+values[k],0)/ks.length;
+      const likelihood = (avg(["SL","M","O","S"])+avg(["ED","EE","A","ID"]))/2;
+      const impact = (avg(["LC","LI","LAV","LAC"])+avg(["FD","RD","NC","PV"]))/2;
+      const overall = (likelihood+impact)/2;
+      const level = n => n<3?"LOW":n<6?"MEDIUM":n<9?"HIGH":"CRITICAL";
+      return {
+        likelihood:+likelihood.toFixed(2),likelihoodLevel:level(likelihood),
+        impact:+impact.toFixed(2),impactLevel:level(impact),
+        overall:+overall.toFixed(2),overallLevel:level(overall),
+      };
+    }
+
+    /* ── ValidOptionsHint ── */
+    function ValidOptionsHint({paramKey,inputVal,onSelect}) {
+      const param = PARAMS[paramKey];
+      if (!param) return null;
+      return (
+        <div style={{marginTop:6,background:"#1a0a0e",border:"1px solid #e94560aa",padding:"10px 12px"}}>
+          <div style={{fontSize:10,color:"#e94560",letterSpacing:2,marginBottom:4}}>
+            ✗&nbsp;<span style={{color:"#ff8a8a"}}>Value <strong style={{color:"#fff"}}>{String(inputVal)}</strong> is invalid for <strong style={{color:"#f5a623"}}>{paramKey}</strong> ({param.label})</span>
+          </div>
+          <div style={{fontSize:10,color:"#666",marginBottom:8,letterSpacing:1}}>CLICK A VALID OPTION TO FIX:</div>
+          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+            {param.values.map(({v,label})=>(
+              <button key={v} onClick={()=>onSelect(paramKey,v)}
+                style={{display:"flex",alignItems:"center",gap:10,background:"#ffffff06",border:"1px solid #e9456033",color:"#fff",padding:"7px 10px",cursor:"pointer",textAlign:"left",fontSize:11}}
+                onMouseEnter={e=>e.currentTarget.style.background="#e9456022"}
+                onMouseLeave={e=>e.currentTarget.style.background="#ffffff06"}>
+                <span style={{minWidth:26,height:26,display:"flex",alignItems:"center",justifyContent:"center",background:"#e94560",color:"#fff",fontWeight:700,fontSize:13,flexShrink:0}}>{v}</span>
+                <span style={{color:"#ccc",lineHeight:1.3}}>{label}</span>
+                <span style={{marginLeft:"auto",color:"#e94560",fontSize:10,whiteSpace:"nowrap"}}>SELECT →</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    /* ── MissingHint ── */
+    function MissingHint({paramKey,onAdd}) {
+      const param = PARAMS[paramKey];
+      return (
+        <div style={{marginTop:6,background:"#1a0a0e",border:"1px solid #e9456088",padding:"10px 12px"}}>
+          <div style={{fontSize:10,color:"#e94560",letterSpacing:2,marginBottom:4}}>
+            ✗&nbsp;<span style={{color:"#ff8a8a"}}>Parameter <strong style={{color:"#fff"}}>{paramKey}</strong> ({param.label}) is missing</span>
+          </div>
+          <div style={{fontSize:10,color:"#666",marginBottom:8,letterSpacing:1}}>CLICK TO ADD:</div>
+          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+            {param.values.map(({v,label})=>(
+              <button key={v} onClick={()=>onAdd(paramKey,v)}
+                style={{display:"flex",alignItems:"center",gap:10,background:"#ffffff06",border:"1px solid #e9456033",color:"#fff",padding:"7px 10px",cursor:"pointer",textAlign:"left",fontSize:11}}
+                onMouseEnter={e=>e.currentTarget.style.background="#e9456022"}
+                onMouseLeave={e=>e.currentTarget.style.background="#ffffff06"}>
+                <span style={{minWidth:26,height:26,display:"flex",alignItems:"center",justifyContent:"center",background:"#e94560",color:"#fff",fontWeight:700,fontSize:13,flexShrink:0}}>{v}</span>
+                <span style={{color:"#ccc"}}>{label}</span>
+                <span style={{marginLeft:"auto",color:"#e94560",fontSize:10,whiteSpace:"nowrap"}}>ADD →</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    /* ── FinalSummary ── */
+    function FinalSummary({parsed,onApply}) {
+      const allResolved = PARAM_KEYS.every(k=>parsed[k]&&parsed[k].isValid);
+      return (
+        <div style={{marginTop:20,background:allResolved?"#0d1a0d":"#110a0a",border:`1px solid ${allResolved?"#4ecdc4":"#e94560"}66`,padding:"18px 20px"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:16}}>
+            <div style={{fontSize:11,letterSpacing:3,color:allResolved?"#4ecdc4":"#e94560"}}>
+              {allResolved?"✓ ALL VALUES RESOLVED":"⚠ INCOMPLETE — FIX ERRORS ABOVE"} — FINAL SUMMARY
+            </div>
+            {allResolved&&(
+              <button onClick={onApply} style={{background:"#4ecdc4",border:"none",color:"#000",padding:"9px 22px",cursor:"pointer",fontSize:12,fontWeight:700,letterSpacing:2}}>
+                ✓ APPLY TO CALCULATOR
+              </button>
+            )}
+          </div>
+          {GROUPS.map(group=>{
+            const gc=GROUP_COLORS[group];
+            const gKeys=PARAM_KEYS.filter(k=>PARAMS[k].group===group);
+            return (
+              <div key={group} style={{marginBottom:14}}>
+                <div style={{fontSize:9,color:gc.accent,letterSpacing:3,marginBottom:6}}>{group.toUpperCase()}</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:4}}>
+                  {gKeys.map(k=>{
+                    const entry=parsed[k];
+                    const ok=entry&&entry.isValid;
+                    const badge=ok?entry.resolvedVal:(entry&&entry.isMissing?"?":"✗");
+                    const desc=ok
+                      ?PARAMS[k].values.find(x=>x.v===entry.resolvedVal).label
+                      :(entry&&entry.isMissing?"Missing":`Got: ${entry&&entry.inputVal}`);
+                    return (
+                      <div key={k} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",background:ok?"#ffffff05":"#e9456010",border:`1px solid ${ok?gc.accent+"33":"#e9456055"}`}}>
+                        <span style={{color:gc.accent,fontWeight:700,fontSize:12,minWidth:36}}>{k}</span>
+                        <span style={{minWidth:26,height:26,display:"flex",alignItems:"center",justifyContent:"center",background:ok?gc.accent:"#e94560",color:"#fff",fontWeight:700,fontSize:ok?13:11,flexShrink:0}}>{badge}</span>
+                        <span style={{color:ok?"#bbb":"#ff8a8a",fontSize:10,lineHeight:1.3}}>{desc}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    /* ── Main App ── */
+    function App() {
+      const [values,setValues]           = useState(getDefaultValues());
+      const [inputText,setInputText]     = useState("");
+      const [parseResult,setParseResult] = useState(null);
+      const [copied,setCopied]           = useState(false);
+      const [urlCopied,setUrlCopied]     = useState(false);
+      const [tab,setTab]                 = useState("form");
+
+      const scores = calcScore(values);
+      const vector = buildVector(values);
+      const url    = `https://riskcalculator.pages.dev/?vector=${vector}&level=5`;
+
+      const handleChange = (key,val) => setValues(p=>({...p,[key]:val}));
+
+      const handleInput = e => {
+        const text = e.target.value;
+        setInputText(text);
+        setParseResult(text.trim()?parseVector(text):null);
+      };
+
+      const handleSelectValidOption = (key,val) => {
+        const newText = inputText.replace(new RegExp(`(^|/)${key}:[^/]*`),`$1${key}:${val}`);
+        setInputText(newText);
+        setParseResult(parseVector(newText));
+      };
+
+      const handleAddMissing = (key,val) => {
+        const sep = inputText.trim().endsWith("/")?"":" /";
+        const newText = inputText.trim()?`${inputText.trim()}${sep}${key}:${val}`:`${key}:${val}`;
+        setInputText(newText.replace(" /","/"));
+        setParseResult(parseVector(newText.replace(" /","/")));
+      };
+
+      const handleApply = () => {
+        if (!parseResult||parseResult.hasErrors) return;
+        const newVals={...getDefaultValues()};
+        PARAM_KEYS.forEach(k=>{ if (parseResult.parsed[k]&&parseResult.parsed[k].isValid) newVals[k]=parseResult.parsed[k].resolvedVal; });
+        setValues(newVals);
+        setTab("form");
+      };
+
+      const copyVector = () => { navigator.clipboard.writeText(vector); setCopied(true); setTimeout(()=>setCopied(false),1800); };
+      const copyUrl    = () => { navigator.clipboard.writeText(url);    setUrlCopied(true); setTimeout(()=>setUrlCopied(false),1800); };
+
+      const errorKeys = parseResult?PARAM_KEYS.filter(k=>parseResult.parsed[k]&&!parseResult.parsed[k].isValid):[];
+
+      return (
+        <div style={{minHeight:"100vh",background:"#0a0a12",color:"#e8e8f0",fontFamily:"'Courier New',monospace"}}>
+
+          {/* Header */}
+          <div style={{background:"linear-gradient(135deg,#1a0a2e 0%,#0a1628 50%,#0d1f0d 100%)",borderBottom:"1px solid #e94560",padding:"20px 32px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+            <div>
+              <div style={{fontSize:11,color:"#e94560",letterSpacing:4,marginBottom:4}}>OWASP v2021</div>
+              <div style={{fontSize:22,fontWeight:700,letterSpacing:2,color:"#fff"}}>RISK ASSESSMENT CALCULATOR</div>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              {[["form","FORM"],["text","PASTE VECTOR"]].map(([t,lbl])=>(
+                <button key={t} onClick={()=>setTab(t)} style={{background:tab===t?"#e94560":"transparent",border:"1px solid #e94560",color:"#fff",padding:"8px 18px",cursor:"pointer",fontSize:12,letterSpacing:2}}>{lbl}</button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{maxWidth:1140,margin:"0 auto",padding:"24px 20px"}}>
+
+            {/* Score Dashboard */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:24}}>
+              {[
+                {label:"LIKELIHOOD", value:scores.likelihood,level:scores.likelihoodLevel},
+                {label:"IMPACT",     value:scores.impact,    level:scores.impactLevel},
+                {label:"OVERALL RISK",value:scores.overall,  level:scores.overallLevel},
+              ].map(({label,value,level})=>(
+                <div key={label} style={{background:"#111120",border:`1px solid ${LEVEL_COLORS[level]}`,padding:"16px 20px",textAlign:"center"}}>
+                  <div style={{fontSize:10,color:"#888",letterSpacing:3,marginBottom:8}}>{label}</div>
+                  <div style={{fontSize:32,fontWeight:700,color:LEVEL_COLORS[level],lineHeight:1}}>{value}</div>
+                  <div style={{display:"inline-block",marginTop:8,padding:"3px 12px",background:LEVEL_COLORS[level]+"22",border:`1px solid ${LEVEL_COLORS[level]}`,color:LEVEL_COLORS[level],fontSize:11,letterSpacing:3}}>{level}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Vector & URL Bar */}
+            <div style={{background:"#111120",border:"1px solid #333",padding:"14px 18px",marginBottom:24}}>
+              <div style={{fontSize:10,color:"#888",letterSpacing:3,marginBottom:8}}>CURRENT VECTOR</div>
+              <div style={{fontFamily:"monospace",fontSize:13,color:"#f5a623",wordBreak:"break-all",marginBottom:10}}>{vector}</div>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <button onClick={copyVector} style={{background:copied?"#4ecdc4":"#222",border:"1px solid #555",color:"#fff",padding:"6px 14px",cursor:"pointer",fontSize:11,letterSpacing:1}}>{copied?"✓ COPIED":"COPY VECTOR"}</button>
+                <button onClick={copyUrl}    style={{background:urlCopied?"#4ecdc4":"#222",border:"1px solid #555",color:"#fff",padding:"6px 14px",cursor:"pointer",fontSize:11,letterSpacing:1}}>{urlCopied?"✓ COPIED":"COPY URL"}</button>
+                <a href={url} target="_blank" rel="noreferrer" style={{background:"#e94560",border:"1px solid #e94560",color:"#fff",padding:"6px 14px",textDecoration:"none",fontSize:11,letterSpacing:1}}>OPEN IN OWASP ↗</a>
+              </div>
+            </div>
+
+            {/* ════ PASTE VECTOR TAB ════ */}
+            {tab==="text"&&(
+              <div>
+                <div style={{background:"#111120",border:"1px solid #333",padding:"20px",marginBottom:16}}>
+                  <div style={{fontSize:10,color:"#888",letterSpacing:3,marginBottom:10}}>PASTE VECTOR STRING</div>
+                  <textarea value={inputText} onChange={handleInput}
+                    placeholder="SL:9/M:4/O:7/S:4/ED:3/EE:3/A:6/ID:3/LC:7/LI:0/LAV:0/LAC:7/FD:3/RD:5/NC:7/PV:5"
+                    style={{width:"100%",background:"#0a0a12",border:`1px solid ${parseResult?(parseResult.hasErrors?"#e94560":"#4ecdc4"):"#444"}`,color:"#f5a623",fontFamily:"monospace",fontSize:13,padding:"10px",resize:"vertical",minHeight:72,boxSizing:"border-box"}}
+                  />
+                  <div style={{marginTop:6,fontSize:11}}>
+                    {!parseResult&&<span style={{color:"#555"}}>Type or paste a vector string — validates in real time.</span>}
+                    {parseResult&&!parseResult.hasErrors&&<span style={{color:"#4ecdc4"}}>✓ All {PARAM_KEYS.length} parameters valid</span>}
+                    {parseResult&&parseResult.hasErrors&&<span style={{color:"#e94560"}}>✗ {errorKeys.length} error{errorKeys.length>1?"s":""} found — fix below</span>}
+                  </div>
+                </div>
+
+                {parseResult&&parseResult.hasErrors&&(
+                  <div style={{marginBottom:16}}>
+                    <div style={{fontSize:10,color:"#e94560",letterSpacing:3,marginBottom:12}}>
+                      VALIDATION ERRORS ({errorKeys.length}) — SELECT CORRECT VALUE TO FIX EACH ERROR
+                    </div>
+                    {PARAM_KEYS.map(k=>{
+                      const entry=parseResult.parsed[k];
+                      if (!entry||entry.isValid) return null;
+                      return (
+                        <div key={k} style={{marginBottom:10}}>
+                          {entry.isMissing
+                            ?<MissingHint paramKey={k} onAdd={handleAddMissing}/>
+                            :entry.isUnknown
+                              ?<div style={{background:"#1a0a0e",border:"1px solid #e9456088",padding:"10px 12px",fontSize:11,color:"#ff8a8a"}}>
+                                  ✗ Unknown parameter key "<strong>{k}</strong>" — not a valid OWASP field.
+                                </div>
+                              :<ValidOptionsHint paramKey={k} inputVal={entry.inputVal} onSelect={handleSelectValidOption}/>
+                          }
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {parseResult&&<FinalSummary parsed={parseResult.parsed} onApply={handleApply}/>}
+              </div>
+            )}
+
+            {/* ════ FORM TAB ════ */}
+            {tab==="form"&&(
+              <div>
+                {GROUPS.map(group=>{
+                  const gc=GROUP_COLORS[group];
+                  const gKeys=PARAM_KEYS.filter(k=>PARAMS[k].group===group);
+                  return (
+                    <div key={group} style={{background:gc.bg,border:`1px solid ${gc.accent}44`,marginBottom:20,overflow:"hidden"}}>
+                      <div style={{padding:"10px 18px",borderBottom:`1px solid ${gc.accent}44`,background:gc.accent+"18",fontSize:10,letterSpacing:4,color:gc.light}}>
+                        {group.toUpperCase()} FACTORS
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:1,background:"#222"}}>
+                        {gKeys.map(key=>{
+                          const param=PARAMS[key];
+                          const curVal=values[key];
+                          return (
+                            <div key={key} style={{background:gc.bg,padding:"14px 16px"}}>
+                              <div style={{marginBottom:8}}>
+                                <span style={{color:gc.accent,fontSize:12,fontWeight:700,letterSpacing:1}}>{key}</span>
+                                <span style={{color:"#888",fontSize:11,marginLeft:8}}>{param.label}</span>
+                                <span style={{float:"right",background:gc.accent+"33",color:gc.light,padding:"1px 8px",fontSize:13,fontWeight:700}}>{curVal}</span>
+                              </div>
+                              <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                                {param.values.map(({v,label})=>(
+                                  <label key={v} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 8px",cursor:"pointer",background:curVal===v?gc.accent+"22":"transparent",border:curVal===v?`1px solid ${gc.accent}66`:"1px solid transparent",fontSize:11,transition:"all 0.15s"}}>
+                                    <input type="radio" name={key} value={v} checked={curVal===v} onChange={()=>handleChange(key,v)} style={{accentColor:gc.accent}}/>
+                                    <span style={{color:curVal===v?gc.light:"#999"}}>
+                                      <strong style={{color:gc.accent}}>{v}</strong> — {label}
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Quick Reference */}
+            <div style={{background:"#111120",border:"1px solid #222",padding:"16px 20px",marginTop:8}}>
+              <div style={{fontSize:10,color:"#555",letterSpacing:3,marginBottom:12}}>VALID VALUES QUICK REFERENCE</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:8}}>
+                {PARAM_KEYS.map(k=>(
+                  <div key={k} style={{fontSize:11}}>
+                    <span style={{color:"#f5a623",fontWeight:700}}>{k}</span>
+                    <span style={{color:"#555"}}> · {PARAMS[k].label}</span>
+                    <div style={{color:"#444",marginTop:2}}>[{PARAMS[k].values.map(x=>x.v).join(", ")}]</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>
