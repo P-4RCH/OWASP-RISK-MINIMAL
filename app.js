@@ -1,1 +1,0 @@
-{"ALL_KEYS": ["SL", "M", "O", "S", "ED", "EE", "A", "ID", "LC", "LI", "LAV", "LAC", "FD", "RD", "NC", "PV"], "OPTIONS": {"SL": {"1": "No technical skills"}}}
